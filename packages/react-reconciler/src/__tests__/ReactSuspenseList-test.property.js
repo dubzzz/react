@@ -263,7 +263,7 @@ describe('ReactSuspenseList', () => {
     );
   });
 
-  it('displays each items in "forwards" order whatever the components structure (tail:collapsed)', async () => {
+  xit('displays each items in "forwards" order whatever the components structure (tail:collapsed)', async () => {
     // WRONG TEST
 
     // TODO Remove unneeded warnings:
@@ -375,7 +375,7 @@ describe('ReactSuspenseList', () => {
 
     const SuspenseArb = fc.record({
       value: fc.hexaString(1, 2).noShrink(),
-      firstRender: fc.boolean(),
+      renderPhase: fc.constantFrom('both', '1 only', '2 only'),
     });
     const SuspenseListArb = fc.memo(n => {
       if (n <= 1) {
@@ -386,30 +386,47 @@ describe('ReactSuspenseList', () => {
 
     await fc.assert(
       fc.asyncProperty(
-        SuspenseListArb(4),
+        SuspenseListArb(2),
         fc.scheduler(),
         async (treeDefinition, s) => {
-          const flatTreeDefinition = [];
+          const flatTreeDefinitionFirstRender = [];
+          const flatTreeDefinitionSecondRender = [];
           const myMap = Object.create(null);
           const getOrCreateScheduledText = label => {
+            // With that trick a same promise can resolve two components at the same time
             if (myMap[label]) {
               return myMap[label];
             }
-            myMap[label] = createScheduledText(s, label);
+            const item = {label, done: false};
+            myMap[label] = {
+              ScheduledComponent: createScheduledText(
+                s,
+                label,
+                () => (item.done = true),
+              ),
+              item,
+            };
             return myMap[label];
           };
-          const buildComponentsTree = (tree, isFirstRender) => {
+          const buildComponentsTree = (
+            tree,
+            isFirstRender,
+            flatTreeDefinition,
+          ) => {
             if (!Array.isArray(tree)) {
-              if (isFirstRender && !tree.firstRender) {
+              if (isFirstRender && tree.renderPhase === '2 only') {
+                return;
+              }
+              if (!isFirstRender && tree.renderPhase === '1 only') {
                 return null;
               }
               // We are rendering a Suspense
-              if (!isFirstRender) {
-                flatTreeDefinition.push(tree.value);
-              }
-              const ScheduledComponent = getOrCreateScheduledText(tree.value);
+              const {ScheduledComponent, item} = getOrCreateScheduledText(
+                tree.value,
+              );
+              flatTreeDefinition.push({item, originalItem: tree});
               return (
-                <Suspense fallback={<Text text={`Loading ${tree}`} />}>
+                <Suspense fallback={<Text text={`Loading ${tree.value}`} />}>
                   <ScheduledComponent />
                 </Suspense>
               );
@@ -418,15 +435,24 @@ describe('ReactSuspenseList', () => {
             return (
               <SuspenseList revealOrder="forwards">
                 {tree.map(subTree =>
-                  buildComponentsTree(subTree, isFirstRender),
+                  buildComponentsTree(
+                    subTree,
+                    isFirstRender,
+                    flatTreeDefinition,
+                  ),
                 )}
               </SuspenseList>
             );
           };
-          const componentsTreeFirst = buildComponentsTree(treeDefinition, true);
+          const componentsTreeFirst = buildComponentsTree(
+            treeDefinition,
+            true,
+            flatTreeDefinitionFirstRender,
+          );
           const componentsTreeSecond = buildComponentsTree(
             treeDefinition,
             false,
+            flatTreeDefinitionSecondRender,
           );
 
           function Foo(props) {
@@ -437,28 +463,82 @@ describe('ReactSuspenseList', () => {
             }
           }
 
+          const alreadyRenderedNodes = new Set();
+          let currentFlatTreeDefinition = flatTreeDefinitionFirstRender;
           ReactNoop.render(<Foo isFirstRender={true} />);
           flushAndYieldScheduler();
 
           s.scheduleSequence([
             async () => {
+              currentFlatTreeDefinition = flatTreeDefinitionSecondRender;
               ReactNoop.render(<Foo isFirstRender={false} />);
               flushAndYieldScheduler();
             },
           ]);
 
           while (s.count() !== 0) {
+            if (currentFlatTreeDefinition.length === 0) {
+              expect(ReactNoop).toMatchRenderedOutput(null);
+            } else if (currentFlatTreeDefinition.length === 1) {
+              if (currentFlatTreeDefinition[0].item.done) {
+                alreadyRenderedNodes.add(
+                  currentFlatTreeDefinition[0].originalItem,
+                );
+              }
+              expect(ReactNoop).toMatchRenderedOutput(
+                <span>
+                  {currentFlatTreeDefinition[0].item.done
+                    ? currentFlatTreeDefinition[0].item.label
+                    : `Loading ${currentFlatTreeDefinition[0].item.label}`}
+                </span>,
+              );
+            } else {
+              let firstUnresolvedIdx = currentFlatTreeDefinition.findIndex(
+                item => !item.item.done,
+              );
+              if (firstUnresolvedIdx === -1) {
+                firstUnresolvedIdx = currentFlatTreeDefinition.length;
+              }
+              expect(ReactNoop).toMatchRenderedOutput(
+                <>
+                  {[
+                    ...currentFlatTreeDefinition
+                      .slice(0, firstUnresolvedIdx)
+                      .map(item => {
+                        // dirty hack
+                        alreadyRenderedNodes.add(item.originalItem);
+                        return <span>{item.item.label}</span>;
+                      }),
+                    ...currentFlatTreeDefinition
+                      .slice(firstUnresolvedIdx)
+                      .map(item => {
+                        //if (alreadyRenderedNodes.has(item.originalItem)) {
+                        //  // This precise item has already been rendered once
+                        //  return <span>{item.item.label}</span>;
+                        //}
+                        return <span>{`Loading ${item.item.label}`}</span>;
+                      }),
+                  ]}
+                </>,
+              );
+            }
             await s.waitOne();
             flushAndYieldScheduler();
           }
 
-          if (flatTreeDefinition.length === 1) {
+          if (flatTreeDefinitionSecondRender.length === 0) {
+            expect(ReactNoop).toMatchRenderedOutput(null);
+          } else if (flatTreeDefinitionSecondRender.length === 1) {
             expect(ReactNoop).toMatchRenderedOutput(
-              <span>{flatTreeDefinition[0]}</span>,
+              <span>{flatTreeDefinitionSecondRender[0].item.label}</span>,
             );
           } else {
             expect(ReactNoop).toMatchRenderedOutput(
-              <>{flatTreeDefinition.map(label => <span>{label}</span>)}</>,
+              <>
+                {flatTreeDefinitionSecondRender.map(item => (
+                  <span>{item.item.label}</span>
+                ))}
+              </>,
             );
           }
         },
@@ -653,43 +733,146 @@ describe('ReactSuspenseList', () => {
     );
   });
 
-  it('only A and B (forwards confirmation)', async () => {
+  it('rerender on forwards [A]', async () => {
+    /**
+ *   ● ReactSuspenseList › displays each items in "forwards" order whatever the components structure (2)
+
+    Property failed after 9 tests
+    { seed: -97976901, path: "8:5", endOnFailure: true }
+    Counterexample: [[{"value":"05","renderPhase":"2 only"},[{"value":"c2","renderPhase":"2 only"},{"value":"34","renderPhase":"1 only"}]],Scheduler`
+    -> [task#2] promise resolved with value "05"
+    -> [task#1] promise resolved with value "34"
+    -> [task#4] sequence:: resolved
+    -> [task#3] promise pending`]
+ */
     spyOnDev(console, 'error');
 
     let A = createAsyncText('A');
     let B = createAsyncText('B');
+    let C = createAsyncText('C');
 
-    function Foo() {
+    function Foo(props) {
+      if (props.version === 1) {
+        return (
+          <SuspenseList revealOrder="forwards">
+            <Suspense fallback={<Text text="Loading C" />}>
+              <C />
+            </Suspense>
+          </SuspenseList>
+        );
+      }
       return (
-        <SuspenseList revealOrder="forwards" tail="collapsed">
+        <SuspenseList revealOrder="forwards">
           <Suspense fallback={<Text text="Loading A" />}>
             <A />
           </Suspense>
           <Suspense fallback={<Text text="Loading B" />}>
             <B />
           </Suspense>
+          <Suspense fallback={<Text text="Loading C" />}>
+            <C />
+          </Suspense>
         </SuspenseList>
       );
     }
 
-    ReactNoop.render(<Foo />);
+    ReactNoop.render(<Foo version={1} />);
 
-    expect(Scheduler).toFlushAndYield(['Suspend! [A]', 'Loading A']);
-    expect(ReactNoop).toMatchRenderedOutput(<span>Loading A</span>);
+    expect(Scheduler).toFlushAndYield(expect.any(Array));
+    expect(ReactNoop).toMatchRenderedOutput(<span>Loading C</span>);
 
     await A.resolve();
+    await C.resolve();
 
-    expect(Scheduler).toFlushAndYield(['A', 'Suspend! [B]', 'Loading B']);
-    expect(ReactNoop).toMatchRenderedOutput(<span>Loading A</span>); // Why?
+    expect(Scheduler).toFlushAndYield(expect.any(Array));
+    expect(ReactNoop).toMatchRenderedOutput(<span>C</span>);
 
-    await B.resolve();
+    ReactNoop.render(<Foo version={2} />);
 
-    expect(Scheduler).toFlushAndYield(['A', 'B']);
+    expect(Scheduler).toFlushAndYield(expect.any(Array));
     expect(ReactNoop).toMatchRenderedOutput(
       <>
         <span>A</span>
-        <span>B</span>
+        <span>Loading B</span>
+        <span>Loading C</span>
+      </> /* Expected C */,
+    );
+  });
+  it('rerender on forwards [B]', async () => {
+    /**
+     * OPPOSITE PROP
+  ● ReactSuspenseList › displays each items in "forwards" order whatever the components structure (2)
+
+    Property failed after 1 tests
+    { seed: 379782372, path: "0", endOnFailure: true }
+    Counterexample: [[[{"value":"8","renderPhase":"2 only"},{"value":"f5","renderPhase":"1 only"}],[{"value":"9","renderPhase":"both"}]],Scheduler`
+    -> [task#1] promise resolved with value "f5"
+    -> [task#2] promise resolved with value "9"
+    -> [task#4] sequence:: resolved
+    -> [task#3] promise pending`]
+    Shrunk 0 time(s)
+ */
+    spyOnDev(console, 'error');
+
+    let A = createAsyncText('A');
+    let B = createAsyncText('B');
+    let C = createAsyncText('C');
+
+    function Foo(props) {
+      if (props.version === 1) {
+        return (
+          <SuspenseList revealOrder="forwards">
+            <Suspense fallback={<Text text="Loading B" />}>
+              <B />
+            </Suspense>
+            <Suspense fallback={<Text text="Loading C" />}>
+              <C />
+            </Suspense>
+          </SuspenseList>
+        );
+      }
+      return (
+        <SuspenseList revealOrder="forwards">
+          <Suspense fallback={<Text text="Loading A" />}>
+            <A />
+          </Suspense>
+          <Suspense fallback={<Text text="Loading C" />}>
+            <C />
+          </Suspense>
+        </SuspenseList>
+      );
+    }
+
+    ReactNoop.render(<Foo version={1} />);
+
+    expect(Scheduler).toFlushAndYield(expect.any(Array));
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>Loading B</span>
+        <span>Loading C</span>
       </>,
+    );
+
+    await B.resolve();
+    await C.resolve();
+
+    expect(Scheduler).toFlushAndYield(expect.any(Array));
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>B</span>
+        <span>C</span>
+      </>,
+    );
+
+    ReactNoop.render(<Foo version={2} />);
+
+    expect(Scheduler).toFlushAndYield(expect.any(Array));
+    expect(ReactNoop).toMatchRenderedOutput(
+      <>
+        <span>Loading A</span>
+        <span>B</span>
+        <span>C</span>
+      </> /* Expected C */,
     );
   });
 });
