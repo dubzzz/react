@@ -10,6 +10,7 @@ import {shorthandToLonghand} from './CSSShorthandProperty';
 import hyphenateStyleName from '../shared/hyphenateStyleName';
 import warnValidStyle from '../shared/warnValidStyle';
 import isUnitlessNumber from '../shared/isUnitlessNumber';
+import isCustomProperty from '../shared/isCustomProperty';
 import {checkCSSPropertyStringCoercion} from 'shared/CheckStringCoercion';
 import {trackHostMutation} from 'react-reconciler/src/ReactFiberMutationTracking';
 
@@ -33,8 +34,7 @@ export function createDangerousStringForStyles(styles) {
       }
       const value = styles[styleName];
       if (value != null && typeof value !== 'boolean' && value !== '') {
-        const isCustomProperty = styleName.indexOf('--') === 0;
-        if (isCustomProperty) {
+        if (isCustomProperty(styleName)) {
           if (__DEV__) {
             checkCSSPropertyStringCoercion(value, styleName);
           }
@@ -66,9 +66,8 @@ export function createDangerousStringForStyles(styles) {
 }
 
 function setValueForStyle(style, styleName, value) {
-  const isCustomProperty = styleName.indexOf('--') === 0;
   if (__DEV__) {
-    if (!isCustomProperty) {
+    if (!isCustomProperty(styleName)) {
       warnValidStyle(styleName, value);
     }
   }
@@ -137,8 +136,7 @@ export function setValueForStyles(node, styles, prevStyles) {
         (styles == null || !styles.hasOwnProperty(styleName))
       ) {
         // Clear style
-        const isCustomProperty = styleName.indexOf('--') === 0;
-        if (isCustomProperty) {
+        if (isCustomProperty(styleName)) {
           style.setProperty(styleName, '');
         } else if (styleName === 'float') {
           style.cssFloat = '';

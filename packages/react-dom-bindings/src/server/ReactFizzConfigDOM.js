@@ -62,6 +62,7 @@ import {
 
 import isAttributeNameSafe from '../shared/isAttributeNameSafe';
 import isUnitlessNumber from '../shared/isUnitlessNumber';
+import isCustomProperty from '../shared/isCustomProperty';
 import getAttributeAlias from '../shared/getAttributeAlias';
 
 import {checkControlledValueProps} from '../shared/ReactControlledValuePropTypes';
@@ -1189,8 +1190,7 @@ function pushStyleAttribute(
 
     let nameChunk;
     let valueChunk;
-    const isCustomProperty = styleName.indexOf('--') === 0;
-    if (isCustomProperty) {
+    if (isCustomProperty(styleName)) {
       nameChunk = stringToChunk(escapeTextForBrowser(styleName));
       if (__DEV__) {
         checkCSSPropertyStringCoercion(styleValue, styleName);
