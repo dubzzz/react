@@ -73,14 +73,14 @@ function setValueForStyle(style, styleName, value) {
   }
 
   if (value == null || typeof value === 'boolean' || value === '') {
-    if (isCustomProperty) {
+    if (isCustomProperty(styleName)) {
       style.setProperty(styleName, '');
     } else if (styleName === 'float') {
       style.cssFloat = '';
     } else {
       style[styleName] = '';
     }
-  } else if (isCustomProperty) {
+  } else if (isCustomProperty(styleName)) {
     style.setProperty(styleName, value);
   } else if (
     typeof value === 'number' &&
